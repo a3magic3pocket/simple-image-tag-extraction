@@ -11,11 +11,19 @@ import (
 )
 
 type oldTags []struct {
-	Layer string `json:"layer"`
-	Name  string `json:"name"`
+	Name string `json:"name"`
 }
 
-func getOldTags(url string) oldTags {
+type tagsResp struct {
+	Count    int         `json:"count"`
+	Next     interface{} `json:"next"`
+	Previous interface{} `json:"previous"`
+	Results  []struct {
+		Name string `json:"name"`
+	} `json:"results"`
+}
+
+func getRequest(url string) []byte {
 	resp, err := http.Get(url)
 	if err != nil {
 		panic(err)
@@ -28,10 +36,33 @@ func getOldTags(url string) oldTags {
 		panic(err)
 	}
 
+	return r
+}
+
+func getOldTags(url string) oldTags {
+	page := 1
+	pageSize := 100
+	originURL := url
 	tags := oldTags{}
-	err = json.Unmarshal(r, &tags)
-	if err != nil {
-		panic(err)
+
+	for {
+		url = fmt.Sprintf("%s?page=%d&page_size=%d", originURL, page, pageSize)
+
+		resp := getRequest(url)
+
+		tResp := tagsResp{}
+		err := json.Unmarshal(resp, &tResp)
+		if err != nil {
+			panic(err)
+		}
+
+		if len(tResp.Results) <= 0 {
+			break
+		}
+
+		tags = append(tags, tResp.Results...)
+
+		page += 1
 	}
 
 	return tags
@@ -59,6 +90,12 @@ func extractTag(rawYaml string) string {
 	return matched[2]
 }
 
+func refineTagsURL(tagsURL string) string {
+	splited := strings.Split(tagsURL, "?")
+
+	return splited[0]
+}
+
 func main() {
 	filePath := flag.String(
 		"f",
@@ -70,13 +107,23 @@ func main() {
 		"tu",
 		"",
 		`registry server tags url
-			ex) https://registry.hub.docker.com/v1/repositories/nginx/tags`,
+			url: https://hub.docker.com/v2/namespaces/<namespace>/repositories/<repository>/tags
+			ex) https://hub.docker.com/v2/namespaces/library/repositories/nginx/tags`,
 	)
 	flag.Parse()
-	if *filePath == "" && *tagsURL == "" {
+	if *filePath == "" || *tagsURL == "" {
+		if *filePath == "" {
+			fmt.Println("filePath is empty")
+		}
+		if *tagsURL == "" {
+			fmt.Println("tagsURL is empty")
+		}
+
 		flag.PrintDefaults()
 		return
 	}
+
+	refinedTagsURL := refineTagsURL(*tagsURL)
 
 	checkFileIsYaml(*filePath)
 
@@ -87,7 +134,7 @@ func main() {
 
 	tag := extractTag(string(data))
 
-	oldTags := getOldTags(*tagsURL)
+	oldTags := getOldTags(refinedTagsURL)
 	for _, oldTag := range oldTags {
 		if oldTag.Name == tag {
 			panic(fmt.Sprintf("'%s' is already released.", tag))
